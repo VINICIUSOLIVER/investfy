@@ -1,0 +1,54 @@
+# Publica uma release no GitHub quando uma tag vX.Y.Z é enviada.
+# O app instalado verifica essas releases a cada 30 min (electron/updater.js).
+#
+# Repositório público: nenhum segredo extra é necessário.
+# Se o repositório virar privado, crie o segredo UPDATER_TOKEN (Settings → Secrets
+# and variables → Actions): fine-grained PAT só com "Contents: Read-only" neste
+# repositório. Ele fica embutido no app para ler as releases privadas.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # para criar a release e enviar os instaladores
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Conferir versão da tag
+        shell: bash
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME não bate com package.json ($PKG). Use 'npm version patch'."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Gravar token de leitura das releases (só repositório privado)
+        shell: bash
+        env:
+          UPDATER_TOKEN: ${{ secrets.UPDATER_TOKEN }}
+        run: |
+          if [ -z "$UPDATER_TOKEN" ]; then echo "Sem UPDATER_TOKEN: app vai ler releases públicas."; exit 0; fi
+          node -e "require('fs').writeFileSync('electron/update-token.json', JSON.stringify({ token: process.env.UPDATER_TOKEN }))"
+
+      - name: Build e publicação
+        run: npm run release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
